@@ -1,0 +1,26 @@
+[package]
+name = "nt-explorer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+egui = "0.23.0"
+eframe = { version = "0.23.0", default-features = false, features = [
+    "default_fonts", # Embed the default egui fonts.
+    "glow",          # Use the glow rendering backend. Alternative: "wgpu".
+    "persistence",   # Enable restoring app state when restarting the app.
+] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+env_logger = "0.10"
+ntapi = "0.4.1"
+anyhow = "1.0.75"
+widestring = "1.0.2"
+
+
+[dependencies.windows]
+version = "0.52.0"
+features = ["Win32_System_Threading", "Win32_Foundation","Win32_System_Diagnostics_Debug","Wdk_System_Threading","Win32_System_Kernel","Win32_System_Diagnostics_ToolHelp"]
+
