@@ -5,6 +5,7 @@ use std::{
     mem::{size_of, size_of_val},
     ptr::{self, addr_of_mut},
 };
+use struct_iterable::Iterable;
 use windows::{
     Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
     Win32::{
@@ -23,7 +24,9 @@ use windows::{
         },
     },
 };
+
 pub struct NtapiPEB(ntapi::ntpebteb::PEB);
+
 pub struct NtapiPEB32(ntapi::ntwow64::PEB32);
 pub enum PEB
 {
@@ -37,7 +40,11 @@ pub struct Process
     pub is_wow64: bool,
     pub peb:      Option<PEB>,
 }
-
+pub struct ProcessListEntry
+{
+    pub name: String,
+    pub pid:  u32,
+}
 impl Process
 {
     pub fn open(pid: u32) -> Result<Self>
@@ -114,9 +121,9 @@ impl Process
             Ok(())
         }
     }
-    pub fn enum_processes() -> Result<Vec<String>>
+    pub fn enum_processes() -> Result<Vec<ProcessListEntry>>
     {
-        let mut processes: Vec<String> = Vec::new();
+        let mut processes: Vec<ProcessListEntry> = Vec::new();
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)? };
 
         let mut process_entry = PROCESSENTRY32W::default();
@@ -125,8 +132,10 @@ impl Process
         {
             while let Ok(()) = unsafe { Process32NextW(snapshot, addr_of_mut!(process_entry)) }
             {
-                processes
-                    .push(U16CStr::from_slice_truncate(&process_entry.szExeFile)?.to_string_lossy())
+                processes.push(ProcessListEntry {
+                    name: U16CStr::from_slice_truncate(&process_entry.szExeFile)?.to_string_lossy(),
+                    pid:  process_entry.th32ProcessID,
+                })
             }
         }
         Ok(processes)
