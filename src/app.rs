@@ -1,4 +1,4 @@
-use egui::{Color32, ViewportBuilder, ViewportId};
+use egui::{Color32, Label, RichText, TextEdit, TextStyle, ViewportBuilder, ViewportId};
 use egui_extras::{Column, TableBuilder};
 
 use crate::process::{Process, ProcessListEntry, PEB};
@@ -14,6 +14,7 @@ pub struct TemplateApp
     processlist_open: bool,
     #[serde(skip)]
     processlist:      Vec<ProcessListEntry>,
+    search_string:    String,
 }
 
 impl Default for TemplateApp
@@ -25,6 +26,7 @@ impl Default for TemplateApp
             process:          None,
             processlist_open: false,
             processlist:      Vec::new(),
+            search_string:    String::new(),
         }
     }
 }
@@ -50,8 +52,30 @@ impl eframe::App for TemplateApp
                 ViewportBuilder::default().with_title("process list"),
                 |ctx, class| {
                     egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut searchbar = ui.add(
+                            egui::TextEdit::singleline(&mut self.search_string)
+                                .hint_text("search processes"),
+                        );
+                        searchbar.mark_changed();
+                        if searchbar.changed()
+                        {
+                            self.processlist.iter_mut().for_each(|x| {
+                                if !x
+                                    .name
+                                    .to_lowercase()
+                                    .contains(&self.search_string.trim().to_lowercase())
+                                {
+                                    x.show = false;
+                                }
+                                else if self.search_string.is_empty()
+                                {
+                                    x.show = true;
+                                }
+                            });
+                        }
                         TableBuilder::new(ui)
                             .column(Column::auto())
+                            .column(Column::remainder())
                             .column(Column::remainder())
                             .column(Column::remainder())
                             .striped(true)
@@ -64,10 +88,17 @@ impl eframe::App for TemplateApp
                                 header.col(|ui| {
                                     ui.strong("process id");
                                 });
+                                header.col(|ui| {
+                                    ui.strong("user name");
+                                });
                             })
                             .body(|mut body| {
                                 for proc in &self.processlist
                                 {
+                                    if !proc.show
+                                    {
+                                        continue;
+                                    }
                                     body.row(30.0, |mut row| {
                                         row.col(|ui| {
                                             if ui
@@ -77,6 +108,7 @@ impl eframe::App for TemplateApp
                                                 if let Ok(mut prc) = Process::open(proc.pid)
                                                 {
                                                     prc.peb().unwrap();
+
                                                     self.label = proc.pid.to_string();
                                                     self.process = Some(prc);
                                                     self.processlist_open = false;
@@ -88,6 +120,9 @@ impl eframe::App for TemplateApp
                                         });
                                         row.col(|ui| {
                                             ui.label(proc.pid.to_string());
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(&proc.username);
                                         });
                                     });
                                 }
@@ -135,11 +170,22 @@ impl eframe::App for TemplateApp
                         {
                             PEB::PEB32(peb) =>
                             {
-                                ui.code(format!("{:#x?}", peb));
+                                ui.add(
+                                    TextEdit::multiline(&mut format!("{:#x?}", peb))
+                                        .font(TextStyle::Monospace),
+                                );
+                                // ui.code(format!("{:#x?}", peb));
                             }
                             PEB::PEB64(peb) =>
                             {
-                                ui.code(format!("{:#x?}", peb));
+                                // ui.code(format!("{:#x?}", peb));
+                                ui.add(
+                                    TextEdit::multiline(&mut format!("{:#x?}", peb))
+                                        .font(TextStyle::Monospace)
+                                        .min_size([0.0, 0.0].into())
+                                        .desired_rows(1)
+                                        .desired_width(f32::INFINITY),
+                                );
                             }
                         }
                     }

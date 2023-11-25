@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 
 use std::{
     ffi::{CStr, CString},
@@ -7,9 +7,21 @@ use std::{
 };
 use struct_iterable::Iterable;
 use windows::{
-    Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
+    core::PWSTR,
+    Wdk::{
+        Foundation::OBJECT_ATTRIBUTES,
+        System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
+    },
     Win32::{
-        Foundation::HANDLE,
+        Foundation::{HANDLE, PSID},
+        Security::{
+            Authentication::Identity::{
+                LsaLookupSids, LsaOpenPolicy, LSA_HANDLE, LSA_OBJECT_ATTRIBUTES,
+                LSA_REFERENCED_DOMAIN_LIST, LSA_TRANSLATED_NAME, POLICY_LOOKUP_NAMES,
+            },
+            GetTokenInformation, SidTypeInvalid, SidTypeUnknown, TOKEN_INFORMATION_CLASS,
+            TOKEN_QUERY, TOKEN_USER,
+        },
         System::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
@@ -19,7 +31,8 @@ use windows::{
                 },
             },
             Threading::{
-                IsWow64Process, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION,
+                IsWow64Process, OpenProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
             },
         },
     },
@@ -42,8 +55,10 @@ pub struct Process
 }
 pub struct ProcessListEntry
 {
-    pub name: String,
-    pub pid:  u32,
+    pub name:     String,
+    pub pid:      u32,
+    pub username: String,
+    pub show:     bool,
 }
 impl Process
 {
@@ -133,12 +148,120 @@ impl Process
             while let Ok(()) = unsafe { Process32NextW(snapshot, addr_of_mut!(process_entry)) }
             {
                 processes.push(ProcessListEntry {
-                    name: U16CStr::from_slice_truncate(&process_entry.szExeFile)?.to_string_lossy(),
-                    pid:  process_entry.th32ProcessID,
+                    name:     U16CStr::from_slice_truncate(&process_entry.szExeFile)?
+                        .to_string_lossy(),
+                    pid:      process_entry.th32ProcessID,
+                    username: Process::get_username(process_entry.th32ProcessID)?,
+                    show:     true,
                 })
             }
         }
         Ok(processes)
+    }
+    pub fn get_username(pid: u32) -> Result<String>
+    {
+        if pid == 0 || pid == 4
+        {
+            return Ok("SYSTEM".to_owned());
+        }
+
+        let mut handle;
+
+        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+        {
+            Err(e) => return Ok("".to_owned()),
+            Ok(ok) => handle = ok,
+        }
+        let mut token = HANDLE(0);
+        let mut token_user = TOKEN_USER::default();
+        let mut ret_len = 0;
+
+        if let Err(e) = unsafe { OpenProcessToken(handle, TOKEN_QUERY, addr_of_mut!(token)) }
+        {
+            return Ok("".to_owned());
+        }
+
+        unsafe {
+            if GetTokenInformation(
+                token,
+                TOKEN_INFORMATION_CLASS(1),
+                Some(addr_of_mut!(token_user) as _),
+                size_of_val(&token_user) as _,
+                addr_of_mut!(ret_len),
+            )
+            .is_err()
+            {
+                GetTokenInformation(
+                    token,
+                    TOKEN_INFORMATION_CLASS(1),
+                    Some(addr_of_mut!(token_user) as _),
+                    ret_len,
+                    addr_of_mut!(ret_len),
+                )?
+            }
+        }
+
+        let mut lsa_handle = LSA_HANDLE::default();
+        let mut object_attr = LSA_OBJECT_ATTRIBUTES::default();
+        let mut sid = token_user.User.Sid;
+        let mut domains = ptr::null_mut();
+        let mut names = ptr::null_mut();
+        let mut full_name;
+        unsafe {
+            let res = LsaOpenPolicy(
+                None,
+                addr_of_mut!(object_attr),
+                POLICY_LOOKUP_NAMES as _,
+                addr_of_mut!(lsa_handle),
+            );
+            ensure!(res.is_ok(), "LsaOpenPolicy failed with status: {:?}", res);
+        }
+
+        unsafe {
+            let res = LsaLookupSids(
+                lsa_handle,
+                1,
+                addr_of_mut!(sid),
+                addr_of_mut!(domains),
+                addr_of_mut!(names),
+            );
+            ensure!(res.is_ok(), "LsaLookupSids failed with status: {:#x?}", res);
+        }
+        if (unsafe { *names }).Use != SidTypeInvalid && (unsafe { *names }).Use != SidTypeUnknown
+        {
+            let mut domain_name_buffer: PWSTR;
+            let mut domain_name_length: u32;
+            if (unsafe { *names }).DomainIndex >= 0
+            {
+                let mut trust_info = ptr::null_mut();
+                trust_info = (unsafe { *domains })
+                    .Domains
+                    .wrapping_add((unsafe { *names }).DomainIndex.try_into().unwrap());
+                domain_name_buffer = (unsafe { *trust_info }).Name.Buffer;
+                domain_name_length = (unsafe { *trust_info }).Name.Length as _;
+            }
+            else
+            {
+                domain_name_buffer = PWSTR::null();
+                domain_name_length = 0;
+            }
+            if !domain_name_buffer.is_null() && domain_name_length != 0
+            {
+                full_name = unsafe { domain_name_buffer.to_string() }?;
+                full_name.push('/');
+                full_name.push_str(unsafe { &(*names).Name.Buffer.to_string()?.to_owned() });
+            }
+            else
+            {
+                full_name = unsafe { (*names).Name.Buffer.to_string() }?;
+            }
+        }
+        else
+        {
+            full_name = String::new();
+        }
+
+        Ok(full_name)
     }
 }
 
