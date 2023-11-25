@@ -26,18 +26,18 @@ use windows::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-                    TH32CS_SNAPPROCESS,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
+                    Thread32Next, PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD,
+                    THREADENTRY32,
                 },
             },
             Threading::{
-                IsWow64Process, OpenProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
+                GetProcessId, IsWow64Process, OpenProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
                 PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
             },
         },
     },
 };
-
 pub struct NtapiPEB(ntapi::ntpebteb::PEB);
 
 pub struct NtapiPEB32(ntapi::ntwow64::PEB32);
@@ -50,6 +50,7 @@ pub enum PEB
 pub struct Process
 {
     pub handle:   HANDLE,
+    pub pid:      u32,
     pub is_wow64: bool,
     pub peb:      Option<PEB>,
 }
@@ -60,6 +61,7 @@ pub struct ProcessListEntry
     pub username: String,
     pub show:     bool,
 }
+
 impl Process
 {
     pub fn open(pid: u32) -> Result<Self>
@@ -69,6 +71,7 @@ impl Process
         unsafe { IsWow64Process(handle, addr_of_mut!(is_wow64) as _)? };
         Ok(Process {
             handle,
+            pid: unsafe { GetProcessId(handle) },
             is_wow64: is_wow64 != 0,
             peb: None,
         })
@@ -263,10 +266,31 @@ impl Process
 
         Ok(full_name)
     }
+    pub fn get_threads(&self) -> Result<()>
+    {
+        let mut threads: Vec<Thread> = Vec::new();
+        let thread_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)? };
+        let mut thread_entry = THREADENTRY32::default();
+        thread_entry.dwSize = size_of::<THREADENTRY32>() as _;
+
+        if let Ok(()) = unsafe { Thread32First(thread_snapshot, addr_of_mut!(thread_entry)) }
+        {
+            while let Ok(()) = unsafe { Thread32Next(thread_snapshot, addr_of_mut!(thread_entry)) }
+            {
+                if thread_entry.th32OwnerProcessID != self.pid
+                {
+                    continue;
+                }
+            }
+        }
+        todo!()
+    }
 }
 
 use std::fmt;
 use widestring::{U16CStr, U16CString};
+
+use crate::thread::Thread;
 impl fmt::Debug for NtapiPEB
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result

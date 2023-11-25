@@ -56,7 +56,8 @@ impl eframe::App for TemplateApp
                             egui::TextEdit::singleline(&mut self.search_string)
                                 .hint_text("search processes"),
                         );
-                        searchbar.mark_changed();
+                        searchbar.request_focus();
+
                         if searchbar.changed()
                         {
                             self.processlist.iter_mut().for_each(|x| {
@@ -68,6 +69,9 @@ impl eframe::App for TemplateApp
                                     x.show = false;
                                 }
                                 else if self.search_string.is_empty()
+                                    || x.name
+                                        .to_lowercase()
+                                        .contains(&self.search_string.trim().to_lowercase())
                                 {
                                     x.show = true;
                                 }
