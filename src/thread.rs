@@ -1,10 +1,7 @@
-use windows::Win32::Foundation::HANDLE;
-
 use crate::process::Process;
 
+#[derive(Clone, Debug)]
 pub struct Thread
 {
-    pub process: Process,
-    pub id:      u32,
-    pub handle:  HANDLE,
+    pub id: u32,
 }

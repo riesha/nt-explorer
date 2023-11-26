@@ -53,6 +53,7 @@ pub struct Process
     pub pid:      u32,
     pub is_wow64: bool,
     pub peb:      Option<PEB>,
+    pub threads:  Option<Vec<Thread>>,
 }
 pub struct ProcessListEntry
 {
@@ -74,6 +75,7 @@ impl Process
             pid: unsafe { GetProcessId(handle) },
             is_wow64: is_wow64 != 0,
             peb: None,
+            threads: None,
         })
     }
     pub fn read(&self, base_addr: usize, size: usize) -> Result<Vec<u8>>
@@ -266,7 +268,7 @@ impl Process
 
         Ok(full_name)
     }
-    pub fn get_threads(&self) -> Result<()>
+    pub fn get_threads(&mut self) -> Result<Vec<Thread>>
     {
         let mut threads: Vec<Thread> = Vec::new();
         let thread_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)? };
@@ -281,9 +283,13 @@ impl Process
                 {
                     continue;
                 }
+                threads.push(Thread {
+                    id: thread_entry.th32ThreadID,
+                });
+                self.threads = Some(threads.clone());
             }
         }
-        todo!()
+        Ok(threads)
     }
 }
 

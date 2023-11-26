@@ -103,6 +103,7 @@ impl eframe::App for TemplateApp
                                     {
                                         continue;
                                     }
+
                                     body.row(30.0, |mut row| {
                                         row.col(|ui| {
                                             if ui
@@ -119,14 +120,23 @@ impl eframe::App for TemplateApp
                                                 }
                                             }
                                         });
-                                        row.col(|ui| {
+                                        let name_col = row.col(|ui| {
                                             ui.label(&proc.name);
                                         });
-                                        row.col(|ui| {
+
+                                        let pid_col = row.col(|ui| {
                                             ui.label(proc.pid.to_string());
                                         });
-                                        row.col(|ui| {
+                                        let username_col = row.col(|ui| {
                                             ui.label(&proc.username);
+                                        });
+
+                                        let parent_row =
+                                            name_col.1.union(pid_col.1).union(username_col.1);
+
+                                        parent_row.context_menu(|ui| {
+                                            ui.button("threads...");
+                                            ui.button("modules...");
                                         });
                                     });
                                 }
