@@ -1,23 +1,19 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 
 use std::{
-    ffi::{CStr, CString},
     mem::{size_of, size_of_val},
     ptr::{self, addr_of_mut},
 };
-use struct_iterable::Iterable;
+
 use windows::{
     core::PWSTR,
-    Wdk::{
-        Foundation::OBJECT_ATTRIBUTES,
-        System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
-    },
+    Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
     Win32::{
-        Foundation::{HANDLE, PSID},
+        Foundation::HANDLE,
         Security::{
             Authentication::Identity::{
                 LsaLookupSids, LsaOpenPolicy, LSA_HANDLE, LSA_OBJECT_ATTRIBUTES,
-                LSA_REFERENCED_DOMAIN_LIST, LSA_TRANSLATED_NAME, POLICY_LOOKUP_NAMES,
+                POLICY_LOOKUP_NAMES,
             },
             GetTokenInformation, SidTypeInvalid, SidTypeUnknown, TOKEN_INFORMATION_CLASS,
             TOKEN_QUERY, TOKEN_USER,
@@ -41,32 +37,27 @@ use windows::{
 pub struct NtapiPEB(ntapi::ntpebteb::PEB);
 
 pub struct NtapiPEB32(ntapi::ntwow64::PEB32);
-pub enum PEB
-{
+pub enum PEB {
     PEB64(NtapiPEB),
     PEB32(NtapiPEB32),
 }
 #[derive(Default)]
-pub struct Process
-{
-    pub handle:   HANDLE,
-    pub pid:      u32,
+pub struct Process {
+    pub handle: HANDLE,
+    pub pid: u32,
     pub is_wow64: bool,
-    pub peb:      Option<PEB>,
-    pub threads:  Option<Vec<Thread>>,
+    pub peb: Option<PEB>,
+    pub threads: Option<Vec<Thread>>,
 }
-pub struct ProcessListEntry
-{
-    pub name:     String,
-    pub pid:      u32,
+pub struct ProcessListEntry {
+    pub name: String,
+    pub pid: u32,
     pub username: String,
-    pub show:     bool,
+    pub show: bool,
 }
 
-impl Process
-{
-    pub fn open(pid: u32) -> Result<Self>
-    {
+impl Process {
+    pub fn open(pid: u32) -> Result<Self> {
         let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid)? };
         let mut is_wow64 = 0;
         unsafe { IsWow64Process(handle, addr_of_mut!(is_wow64) as _)? };
@@ -78,8 +69,7 @@ impl Process
             threads: None,
         })
     }
-    pub fn read(&self, base_addr: usize, size: usize) -> Result<Vec<u8>>
-    {
+    pub fn read(&self, base_addr: usize, size: usize) -> Result<Vec<u8>> {
         let mut buffer: Vec<u8> = Vec::with_capacity(size);
         unsafe {
             ReadProcessMemory(
@@ -92,10 +82,8 @@ impl Process
         };
         Ok(buffer)
     }
-    pub fn peb(&mut self) -> Result<()>
-    {
-        if self.is_wow64
-        {
+    pub fn peb(&mut self) -> Result<()> {
+        if self.is_wow64 {
             let mut ptr = 0usize;
             unsafe {
                 let status = NtQueryInformationProcess(
@@ -105,8 +93,7 @@ impl Process
                     size_of_val(&ptr) as _,
                     ptr::null_mut() as _,
                 );
-                if status.is_err()
-                {
+                if status.is_err() {
                     return Err(anyhow!("error calling NtQueryInformationProcess"));
                 }
                 let peb = self.read(ptr, size_of::<ntapi::ntwow64::PEB32>())?;
@@ -116,9 +103,7 @@ impl Process
                 self.peb = Some(peb);
             }
             Ok(())
-        }
-        else
-        {
+        } else {
             let mut pbi = PROCESS_BASIC_INFORMATION::default();
             unsafe {
                 let status = NtQueryInformationProcess(
@@ -128,8 +113,7 @@ impl Process
                     size_of_val(&pbi) as _,
                     ptr::null_mut() as _,
                 );
-                if status.is_err()
-                {
+                if status.is_err() {
                     return Err(anyhow!("error calling NtQueryInformationProcess"));
                 }
                 let peb = self.read(pbi.PebBaseAddress as _, size_of::<ntapi::ntpebteb::PEB>())?;
@@ -141,39 +125,32 @@ impl Process
             Ok(())
         }
     }
-    pub fn enum_processes() -> Result<Vec<ProcessListEntry>>
-    {
+    pub fn enum_processes() -> Result<Vec<ProcessListEntry>> {
         let mut processes: Vec<ProcessListEntry> = Vec::new();
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)? };
 
         let mut process_entry = PROCESSENTRY32W::default();
         process_entry.dwSize = size_of::<PROCESSENTRY32W>() as _;
-        if let Ok(()) = unsafe { Process32FirstW(snapshot, addr_of_mut!(process_entry)) }
-        {
-            while let Ok(()) = unsafe { Process32NextW(snapshot, addr_of_mut!(process_entry)) }
-            {
+        if let Ok(()) = unsafe { Process32FirstW(snapshot, addr_of_mut!(process_entry)) } {
+            while let Ok(()) = unsafe { Process32NextW(snapshot, addr_of_mut!(process_entry)) } {
                 processes.push(ProcessListEntry {
-                    name:     U16CStr::from_slice_truncate(&process_entry.szExeFile)?
-                        .to_string_lossy(),
-                    pid:      process_entry.th32ProcessID,
+                    name: U16CStr::from_slice_truncate(&process_entry.szExeFile)?.to_string_lossy(),
+                    pid: process_entry.th32ProcessID,
                     username: Process::get_username(process_entry.th32ProcessID)?,
-                    show:     true,
+                    show: true,
                 })
             }
         }
         Ok(processes)
     }
-    pub fn get_username(pid: u32) -> Result<String>
-    {
-        if pid == 0 || pid == 4
-        {
+    pub fn get_username(pid: u32) -> Result<String> {
+        if pid == 0 || pid == 4 {
             return Ok("SYSTEM".to_owned());
         }
 
         let mut handle;
 
-        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
-        {
+        match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
             Err(e) => return Ok("".to_owned()),
             Ok(ok) => handle = ok,
         }
@@ -181,8 +158,7 @@ impl Process
         let mut token_user = TOKEN_USER::default();
         let mut ret_len = 0;
 
-        if let Err(e) = unsafe { OpenProcessToken(handle, TOKEN_QUERY, addr_of_mut!(token)) }
-        {
+        if let Err(e) = unsafe { OpenProcessToken(handle, TOKEN_QUERY, addr_of_mut!(token)) } {
             return Ok("".to_owned());
         }
 
@@ -232,55 +208,43 @@ impl Process
             );
             ensure!(res.is_ok(), "LsaLookupSids failed with status: {:#x?}", res);
         }
-        if (unsafe { *names }).Use != SidTypeInvalid && (unsafe { *names }).Use != SidTypeUnknown
-        {
+        if (unsafe { *names }).Use != SidTypeInvalid && (unsafe { *names }).Use != SidTypeUnknown {
             let mut domain_name_buffer: PWSTR;
             let mut domain_name_length: u32;
-            if (unsafe { *names }).DomainIndex >= 0
-            {
+            if (unsafe { *names }).DomainIndex >= 0 {
                 let mut trust_info = ptr::null_mut();
                 trust_info = (unsafe { *domains })
                     .Domains
                     .wrapping_add((unsafe { *names }).DomainIndex.try_into().unwrap());
                 domain_name_buffer = (unsafe { *trust_info }).Name.Buffer;
                 domain_name_length = (unsafe { *trust_info }).Name.Length as _;
-            }
-            else
-            {
+            } else {
                 domain_name_buffer = PWSTR::null();
                 domain_name_length = 0;
             }
-            if !domain_name_buffer.is_null() && domain_name_length != 0
-            {
+            if !domain_name_buffer.is_null() && domain_name_length != 0 {
                 full_name = unsafe { domain_name_buffer.to_string() }?;
                 full_name.push('/');
                 full_name.push_str(unsafe { &(*names).Name.Buffer.to_string()?.to_owned() });
-            }
-            else
-            {
+            } else {
                 full_name = unsafe { (*names).Name.Buffer.to_string() }?;
             }
-        }
-        else
-        {
+        } else {
             full_name = String::new();
         }
 
         Ok(full_name)
     }
-    pub fn get_threads(&mut self) -> Result<Vec<Thread>>
-    {
+    pub fn get_threads(&mut self) -> Result<Vec<Thread>> {
         let mut threads: Vec<Thread> = Vec::new();
         let thread_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)? };
         let mut thread_entry = THREADENTRY32::default();
         thread_entry.dwSize = size_of::<THREADENTRY32>() as _;
 
-        if let Ok(()) = unsafe { Thread32First(thread_snapshot, addr_of_mut!(thread_entry)) }
-        {
+        if let Ok(()) = unsafe { Thread32First(thread_snapshot, addr_of_mut!(thread_entry)) } {
             while let Ok(()) = unsafe { Thread32Next(thread_snapshot, addr_of_mut!(thread_entry)) }
             {
-                if thread_entry.th32OwnerProcessID != self.pid
-                {
+                if thread_entry.th32OwnerProcessID != self.pid {
                     continue;
                 }
                 threads.push(Thread {
@@ -297,10 +261,8 @@ use std::fmt;
 use widestring::{U16CStr, U16CString};
 
 use crate::thread::Thread;
-impl fmt::Debug for NtapiPEB
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
-    {
+impl fmt::Debug for NtapiPEB {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PEB")
             .field("InheritedAddressSpace", &self.0.InheritedAddressSpace)
             .field("ReadImageFileExecOptions", &self.0.ReadImageFileExecOptions)
@@ -458,10 +420,8 @@ impl fmt::Debug for NtapiPEB
             .finish()
     }
 }
-impl fmt::Debug for NtapiPEB32
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
-    {
+impl fmt::Debug for NtapiPEB32 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PEB")
             .field("InheritedAddressSpace", &self.0.InheritedAddressSpace)
             .field("ReadImageFileExecOptions", &self.0.ReadImageFileExecOptions)
